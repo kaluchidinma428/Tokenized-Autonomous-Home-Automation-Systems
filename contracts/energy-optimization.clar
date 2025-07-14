@@ -1,47 +1,174 @@
-;; energy-optimization.clar
+;; Energy Optimization Contract
+;; Manages automated energy systems for maximum efficiency
 
-;; This contract simulates a basic energy optimization system.
-;; It allows users to submit energy consumption data, and the contract
-;; calculates an optimization score based on predefined parameters.
+;; Constants
+(define-constant CONTRACT_OWNER tx-sender)
+(define-constant ERR_NOT_AUTHORIZED (err u200))
+(define-constant ERR_SCHEDULE_NOT_FOUND (err u201))
+(define-constant ERR_INVALID_TIME (err u202))
+(define-constant ERR_INVALID_ENERGY_LEVEL (err u203))
+(define-constant ERR_OPTIMIZATION_FAILED (err u204))
 
-(define-constant ERR-INVALID-DATA (err u100))
-(define-constant ERR-NOT-AUTHORIZED (err u101))
-(define-constant ERR-ALREADY-SUBMITTED (err u102))
+;; Data Variables
+(define-data-var next-schedule-id uint u1)
+(define-data-var total-energy-saved uint u0)
+(define-data-var optimization-active bool true)
 
-(define-map user-data
-  { user: principal, date: uint }
-  { energy-consumption: uint, optimization-score: uint }
+;; Data Maps
+(define-map energy-schedules
+  { schedule-id: uint }
+  {
+    owner: principal,
+    device-id: uint,
+    start-time: uint,
+    end-time: uint,
+    energy-target: uint,
+    priority-level: uint,
+    is-active: bool,
+    created-block: uint
+  }
 )
 
-(define-read-only (is-valid-data (energy-consumption uint))
-  (if (and (< energy-consumption u1000) (> energy-consumption u0))
-      true
-      false)
+(define-map energy-consumption
+  { device-id: uint, time-period: uint }
+  {
+    consumption-amount: uint,
+    efficiency-rating: uint,
+    cost-estimate: uint
+  }
 )
 
-(define-read-only (calculate-optimization-score (energy-consumption uint))
-  (let ((base-score (- u1000 energy-consumption)))
-    (if (> base-score u500)
-        u500
-        base-score)
-  )
+(define-map optimization-rules
+  { rule-id: uint }
+  {
+    condition-type: uint,
+    threshold-value: uint,
+    action-type: uint,
+    energy-savings: uint,
+    is-enabled: bool
+  }
 )
 
-(define-public (submit-data (energy-consumption uint) (date uint))
-  (begin
-    (asserts! (is-valid-data energy-consumption) ERR-INVALID-DATA)
-    (asserts! (not (map-get? user-data { user: tx-sender, date: date })) ERR-ALREADY-SUBMITTED)
+(define-map daily-energy-stats
+  { date: uint, owner: principal }
+  {
+    total-consumption: uint,
+    total-savings: uint,
+    efficiency-score: uint,
+    peak-usage-time: uint
+  }
+)
 
-    (let ((optimization-score (calculate-optimization-score energy-consumption)))
-      (map-insert user-data { user: tx-sender, date: date } { energy-consumption: energy-consumption, optimization-score: optimization-score })
-      (ok optimization-score)
+;; Public Functions
+
+;; Create energy optimization schedule
+(define-public (create-energy-schedule (device-id uint) (start-time uint) (end-time uint) (energy-target uint) (priority-level uint))
+  (let
+    (
+      (schedule-id (var-get next-schedule-id))
     )
+    (asserts! (< start-time end-time) ERR_INVALID_TIME)
+    (asserts! (and (>= energy-target u1) (<= energy-target u1000)) ERR_INVALID_ENERGY_LEVEL)
+    (asserts! (and (>= priority-level u1) (<= priority-level u5)) (err u205))
+
+    (map-set energy-schedules
+      { schedule-id: schedule-id }
+      {
+        owner: tx-sender,
+        device-id: device-id,
+        start-time: start-time,
+        end-time: end-time,
+        energy-target: energy-target,
+        priority-level: priority-level,
+        is-active: true,
+        created-block: block-height
+      }
+    )
+
+    (var-set next-schedule-id (+ schedule-id u1))
+    (ok schedule-id)
   )
 )
 
-(define-read-only (get-user-data (user principal) (date uint))
-  (match (map-get? user-data { user: user, date: date })
-    some(data) data
-    none { energy-consumption: u0, optimization-score: u0 }
+;; Update energy consumption data
+(define-public (update-energy-consumption (device-id uint) (time-period uint) (consumption-amount uint) (efficiency-rating uint))
+  (let
+    (
+      (cost-estimate (* consumption-amount u15))
+    )
+    (asserts! (and (>= efficiency-rating u0) (<= efficiency-rating u100)) (err u206))
+
+    (map-set energy-consumption
+      { device-id: device-id, time-period: time-period }
+      {
+        consumption-amount: consumption-amount,
+        efficiency-rating: efficiency-rating,
+        cost-estimate: cost-estimate
+      }
+    )
+
+    (ok true)
+  )
+)
+
+;; Record daily energy statistics
+(define-public (record-daily-stats (date uint) (total-consumption uint) (total-savings uint) (efficiency-score uint) (peak-usage-time uint))
+  (begin
+    (map-set daily-energy-stats
+      { date: date, owner: tx-sender }
+      {
+        total-consumption: total-consumption,
+        total-savings: total-savings,
+        efficiency-score: efficiency-score,
+        peak-usage-time: peak-usage-time
+      }
+    )
+
+    (var-set total-energy-saved (+ (var-get total-energy-saved) total-savings))
+    (ok true)
+  )
+)
+
+;; Toggle optimization system
+(define-public (toggle-optimization (active bool))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_NOT_AUTHORIZED)
+    (var-set optimization-active active)
+    (ok active)
+  )
+)
+
+;; Read-only Functions
+
+;; Get energy schedule
+(define-read-only (get-energy-schedule (schedule-id uint))
+  (map-get? energy-schedules { schedule-id: schedule-id })
+)
+
+;; Get energy consumption data
+(define-read-only (get-energy-consumption (device-id uint) (time-period uint))
+  (map-get? energy-consumption { device-id: device-id, time-period: time-period })
+)
+
+;; Get daily energy statistics
+(define-read-only (get-daily-stats (date uint) (owner principal))
+  (map-get? daily-energy-stats { date: date, owner: owner })
+)
+
+;; Get total energy saved
+(define-read-only (get-total-energy-saved)
+  (var-get total-energy-saved)
+)
+
+;; Check if optimization is active
+(define-read-only (is-optimization-active)
+  (var-get optimization-active)
+)
+
+;; Calculate efficiency score for device
+(define-read-only (calculate-efficiency-score (device-id uint) (time-period uint))
+  (match (map-get? energy-consumption { device-id: device-id, time-period: time-period })
+    consumption-data (get efficiency-rating consumption-data)
+    u0
   )
 )
